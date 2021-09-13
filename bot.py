@@ -75,7 +75,9 @@ class Bot:
         self.long_poller = VkBotLongPoll(self.vk, self.group_id)
         # мотод который позволит боту отвечать пользователю, а не нам
         self.api = self.vk.get_api()
-        # переменная отвечающая за состояние пользователя: находение пользователя на каком-то шаге какого-то сценария
+        # переменная отвечающая за состояние пользователя: находение пользователя на каком-то шаге какого-то сценария.
+        # Тут есть баг, что если программу перезапустить все стейты сотрутся (имена и почты),
+        # чтобы этого не было нужно использовать базы данных
         self.user_states = dict()  # user_id -> UserState
 
     def run(self):
@@ -97,7 +99,7 @@ class Bot:
         :param event: VkBotMessageEvent object
         :return: None
         """
-        if event.type == VkBotEventType.MESSAGE_NEW:
+        if event.type != VkBotEventType.MESSAGE_NEW:
             log.info('Пока не умеем обрабатывать события такого типа %s', event.type)
             return
 
@@ -110,8 +112,11 @@ class Bot:
         else:
             # search intent
             for intent in settings.INTENTS:
-                # если какой-нибудь токен находится в тексте всерди всех токенов, то запускаем интент
-                if any(token in text for token in intent['tokens']):
+                # если нашелся хоть один интернт логируем его хотябы в дебаг
+                log.debug(f'User gets {intent}')
+                # если какой-нибудь токен находится в тексте среди всех токенов, то запускаем интент. При этом приводим
+                # текст к нижнему регистру, т.к. в токенах мы писали их с нижней строки.
+                if any(token in text.lower() for token in intent['tokens']):
                     # если интент имеет не пустой ответ, значит надо его сообщить и больше ничего не делать,
                     # если нет, то запустить сценарий
                     if intent['answer']:
@@ -147,7 +152,7 @@ class Bot:
         # нужно понять на каком шаге он находится, прошел ли он этот шаг и либо оставить его на этом шаге
         # (если не закончил), либо пребросить на следующий.
         state = self.user_states[user_id]
-        steps = settings.SCENARIOS[state.scenario_name]['steps']
+        steps = state.scenario_name['steps']
         step = steps[state.step_name]
         # далее нужно запустить handler. Нужно понять находится ли данный handler в исходном файле handler
         handler = getattr(handlers, step['handler'])
@@ -161,6 +166,8 @@ class Bot:
                 # если у следующего степа есть некс степ, то переходим в него
                 state.step_name = step['next_step']
             else:
+                # если пользователь закончил сценарий логируем это в инфо, чтобы видеть с какими данными он его закончил
+                log.info('Зарегистрирован: {name} - {email}'.format(**state.context))
                 # если нет, то заканчиваем сценарий. Т.е. нужно удалить state из хранилища state
                 self.user_states.pop(user_id)
         else:
