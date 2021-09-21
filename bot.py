@@ -3,8 +3,10 @@
 import logging
 import random
 import vk_api
+from pony.orm import db_session
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 import handlers
+from models import UserState, Registration
 
 try:
     import settings
@@ -37,15 +39,16 @@ def configure_logging():
     log.setLevel(logging.DEBUG)
 
 
-# класс отвечающий за находение пользователя на каком-то шаге какого-то сценария
-class UserState:
-    """Состояние пользователя внутри сценария"""
-
-    def __init__(self, scenario_name, step_name, context=None):
-        self.scenario_name = scenario_name
-        self.step_name = step_name
-        # если контекст пустой (None или пустой Dict) то передадим пустой Dict
-        self.context = context or {}
+# перевели в models для сохранения в бд
+# # класс отвечающий за находение пользователя на каком-то шаге какого-то сценария
+# class UserState:
+#     """Состояние пользователя внутри сценария"""
+#
+#     def __init__(self, scenario_name, step_name, context=None):
+#         self.scenario_name = scenario_name
+#         self.step_name = step_name
+#         # если контекст пустой (None или пустой Dict) то передадим пустой Dict
+#         self.context = context or {}
 
 
 # создаем в вк сообщество. В настройках создаем ключ (токен) и включаем LongPoll.
@@ -77,8 +80,9 @@ class Bot:
         self.api = self.vk.get_api()
         # переменная отвечающая за состояние пользователя: находение пользователя на каком-то шаге какого-то сценария.
         # Тут есть баг, что если программу перезапустить все стейты сотрутся (имена и почты),
-        # чтобы этого не было нужно использовать базы данных
-        self.user_states = dict()  # user_id -> UserState
+        # чтобы этого не было нужно использовать базы данных. Поскольку мы перенесли user_states в бд нижняя
+        # строка не нужна
+        # self.user_states = dict()  # user_id -> UserState
 
     def run(self):
         """ Run bot """
@@ -93,6 +97,9 @@ class Bot:
                 # добавлена подробная информация исключения
                 log.exception('Ошибка в обработке события')
 
+    # обернули в db_session т.к. pony автоматически не сохраняет изменения, их нужно сохранять, либо прописав commit()
+    # после изменений, либо обернуть функцию в декоратор, тогда изменения сохраняться автоматом
+    @db_session
     def on_event(self, event):
         """
         Return message if it's text
@@ -105,10 +112,17 @@ class Bot:
 
         user_id = event.message.peer_id
         text = event.message.text
+        # есть два объекта UserState и user_id исходя из этого нужно узнать наш state.
+        state = UserState.get(user_id=str(user_id))
+
         # если пользователь в структуре user_states, то продолжаем сценарий, если нет то он вне сценария.
-        # Нужно найти интент, чтобы выдать сразу ответ, либо начать сценарий
-        if user_id in self.user_states:
-            text_to_send = self.continue_scenario(user_id=user_id, text=text)
+        # Нужно найти интент, чтобы выдать сразу ответ, либо начать сценарий. После добавления user_states в бд
+        # нижняя строка изменилась.
+        # if user_id in self.user_states:
+        if state is not None:
+            # После добавления user_states в бд нижняя строка изменилась.
+            # text_to_send = self.continue_scenario(user_id=user_id, text=text)
+            text_to_send = self.continue_scenario(text, state)
         else:
             # search intent
             for intent in settings.INTENTS:
@@ -132,7 +146,7 @@ class Bot:
                                random_id=random.randint(0, 2 ** 20),
                                # задержка для того, чтобы если одно и тоже сообщение будет отослано несколько
                                # раз подряд, то пользователь увидит только одно сообщение
-                               peer_id=user_id) # id позователя, чтобы ответ пришел именно ему
+                               peer_id=user_id)  # id позователя, чтобы ответ пришел именно ему
 
     # метод который будет запускать сценарии
     def start_scenario(self, user_id, scenario_name):
@@ -143,16 +157,19 @@ class Bot:
         step = scenario['steps'][first_step]
         # выдаем текст этого шага и сохраняем state
         text_to_send = step['text']
-        self.user_states[user_id] = UserState(scenario_name=scenario, step_name=first_step)
+        # после переноса UserState в models нижняя строка изменилась
+        # self.user_states[user_id] = UserState(scenario_name=scenario, step_name=first_step)
+        UserState(user_id=str(user_id), scenario_name=str(scenario_name), step_name=first_step, context={})
 
         return text_to_send
 
-    # метод который будет заниматься только продолжение сценария
-    def continue_scenario(self, user_id, text):
+    # метод который будет заниматься только продолжение сценария. После внесения user_states в бд удаляется
+    # создание переменной state, мы ее будем получать на вход. Чтобы не было запроса в двух местах.
+    def continue_scenario(self, text, state):
         # нужно понять на каком шаге он находится, прошел ли он этот шаг и либо оставить его на этом шаге
         # (если не закончил), либо пребросить на следующий.
-        state = self.user_states[user_id]
-        steps = state.scenario_name['steps']
+        # state = self.user_states[user_id]
+        steps = settings.SCENARIOS[state.scenario_name]['steps']
         step = steps[state.step_name]
         # далее нужно запустить handler. Нужно понять находится ли данный handler в исходном файле handler
         handler = getattr(handlers, step['handler'])
@@ -168,8 +185,11 @@ class Bot:
             else:
                 # если пользователь закончил сценарий логируем это в инфо, чтобы видеть с какими данными он его закончил
                 log.info('Зарегистрирован: {name} - {email}'.format(**state.context))
-                # если нет, то заканчиваем сценарий. Т.е. нужно удалить state из хранилища state
-                self.user_states.pop(user_id)
+                # если нет, то заканчиваем сценарий. Т.е. нужно удалить state из хранилища state. После добавления
+                # user_states в бд нижняя строка изменилась.
+                # self.user_states.pop(user_id)
+                Registration(name=state.context['name'], email=state.context['email'])
+                state.delete()
         else:
             # если handler не совпал, то остается на текущем шаге и выдать failure_text
             text_to_send = step['failure_text'].format(**state.context)

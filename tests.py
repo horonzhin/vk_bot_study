@@ -2,10 +2,25 @@ from copy import deepcopy
 from unittest import TestCase
 from unittest.mock import patch, Mock, ANY
 
+from pony.orm import db_session, rollback
 from vk_api.bot_longpoll import VkBotMessageEvent, VkBotEvent
 
 import settings
 from bot import Bot
+
+
+# создаем декоратор для тестирования функций после добавления бд. Он будет открывать транзакцию на тех функциях где
+# задействованы бд, а затем их откатывать, чтобы бд оставались без изменений.
+def isolate_db(test_func):
+    # фунция вернет обертку, которая получает некие аргументы, которые передаст в тест
+    def wrapper(*args, **kwargs):
+        # открываем ту самую транзакцию
+        with db_session:
+            # далее происходит вызов функции с переданными аргументами
+            test_func(*args, **kwargs)
+            # и откатываем транзакцию
+            rollback()
+    return wrapper
 
 
 class Test1(TestCase):
@@ -85,12 +100,13 @@ class Test1(TestCase):
         settings.SCENARIOS['registration']['steps']['step3']['text'].format(name='Дмитрий', email='email@email.ru')
     ]
 
+    @isolate_db
     def test_run_ok(self):
         # создадим мок который нам заменит все входящие event
         send_mock = Mock()
         api_mock = Mock()
         # если кто-то захочет у api (который уже мок) вызвать методы .messages.send то он наткнется на другой мок
-        api_mock.message.send = send_mock
+        api_mock.messages.send = send_mock
 
         events = []
         for input_text in self.INPUTS:
@@ -112,26 +128,18 @@ class Test1(TestCase):
             bot = Bot('', '')
             # bot.api тоже будет моком
             bot.api = api_mock
-            # bot.on_event = Mock() # коментить
             bot.run()
 
-        print(len(self.INPUTS))
-        print(send_mock.call_count)
-        # print(bot.on_event.call_count) # коментить
         # проверяем что функция send внутри функции on_event запускалась столько раз сколько у нас INPUTS
         assert send_mock.call_count == len(self.INPUTS)
-        # assert bot.on_event.call_count == len(self.INPUTS) # коментить
-
 
         # а также мы пробегаемся по листу всех аргументов всех вызовов (столько раз, сколько запускалась функция
         # on_event, т.е. количество INPUTS) и далее на каждом шаге вписываем какие ответы были даны роботом,
         # если они все совпадают с EXPECTED_OUTPUTS то тест пройден
         real_outputs = []
-        for call in send_mock.call_args_list: # send_mock.call_args_list/bot.on_event.call_args_list
+        for call in send_mock.call_args_list:
             args, kwargs = call
             real_outputs.append(kwargs['message'])
-
-        print(real_outputs)
         assert real_outputs == self.EXPECTED_OUTPUTS
 
     # # Этот тест работал до того, как мы в код добавили работу со сценариями, но сейчас этот тест не работает,
