@@ -1,3 +1,6 @@
+from io import BytesIO
+
+import requests
 from PIL import Image, ImageDraw, ImageFont
 
 TEMPLATE_PATH = 'files/ticket_base.jpeg'
@@ -6,6 +9,8 @@ FONT_SIZE = 20
 BLACK = (0, 0, 0, 255)
 NAME_OFFSET = (230, 165)
 EMAIL_OFFSET = (230, 200)
+AVATAR_SIZE = 100
+AVATAR_OFFSET = (100, 200)
 
 
 def generate_ticket(name, email):
@@ -16,4 +21,33 @@ def generate_ticket(name, email):
         draw.text(NAME_OFFSET, name, font=font, fill=BLACK)
         draw.text(EMAIL_OFFSET, email, font=font, fill=BLACK)
 
-        base.show()
+        try:
+            response = requests.get(url=f'https://api.adorable.io/avatars/{AVATAR_SIZE}/{email}')
+            # передаем на вход файловому дискриптору IO (на подобие работы с фалами .open/.write и т.д.) байты
+            # (.content),чтобы потом работать с ним, как с обычным файлом. Позволяет записывать данные в память и не
+            # хранить их нигде.
+            avatar_file_like = BytesIO(response.content)
+            avatar = Image.open(avatar_file_like)
+
+            base.paste(avatar, AVATAR_OFFSET)
+
+        except Exception as exc:
+            print(f'Сайт не отвечает: {exc}')
+
+        # тоже что код ниже "with open" только ничего не создается и не занимает память. Файловый дискриптор BytesIO
+        # хранит только байты, но позволяет работать с ними, как с файлом. Ниже мы использовали "with open", чтобы
+        # сохранить пример.
+        temp_file = BytesIO()
+        base.save(temp_file, 'png')
+        # когда байты записались в дискриптор курсор остался в конце строки после всех байтов, чтобы потом можно было
+        # прочитать его, курсор нужно вернуть в начальное положение, иначе читающий ничего не увидит.
+        temp_file.seek(0)
+
+        return temp_file
+
+        # base.show()
+        # открываем какой-нибудь файл для записи и откроем его для записи в виде байт. Не преобразуем никакие тексты
+        # ни в каких кодеровках, а пишем чистые байты.
+        # with open('files/ticket_example.png', 'wb') as f:
+        #     base.save(f, 'png')
+
