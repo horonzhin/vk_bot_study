@@ -1,12 +1,11 @@
 from copy import deepcopy
 from unittest import TestCase
 from unittest.mock import patch, Mock, ANY
-
 from pony.orm import db_session, rollback
 from vk_api.bot_longpoll import VkBotMessageEvent, VkBotEvent
-
 import settings
 from bot import Bot
+from generate_ticket import generate_ticket
 
 
 # создаем декоратор для тестирования функций после добавления бд. Он будет открывать транзакцию на тех функциях где
@@ -20,6 +19,7 @@ def isolate_db(test_func):
             test_func(*args, **kwargs)
             # и откатываем транзакцию
             rollback()
+
     return wrapper
 
 
@@ -141,6 +141,26 @@ class Test1(TestCase):
             args, kwargs = call
             real_outputs.append(kwargs['message'])
         assert real_outputs == self.EXPECTED_OUTPUTS
+
+    def test_image_generation(self):
+        # нужно замокать запрос на сайт генерации аватарок. avatar_mock = Mock() вызовется когда применяться скобки
+        # requests.get"""(url=f'https://api.adorable.io/avatars/{AVATAR_SIZE}/{email}')""" а затем вызовется атрибут
+        # content - BytesIO(response."""content"""). Для этого нам нужно сохранить наш аватар из примера и открыть его
+        with open('files/rty.png', 'rb') as avatar_file:
+            avatar_mock = Mock()
+            avatar_mock.content = avatar_file.read()
+        # TODO чтобы тест работал успешно нужно с сайта генерации аватарок сохранить пример аватара в нужном размере
+        #  в формате png, jpeg и т.д., который мы вставляем в билет
+
+        with patch('requests.get', return_value=avatar_mock):
+            ticket_file = generate_ticket('qwe', 'rty')
+
+        # берем наш ticket_file и сравниваем с уже существующим изображением. Открываем это изображение в байтах
+        with open('files/ticket_example.png', 'rb') as expected_file:
+            expected_bytes = expected_file.read()
+
+        assert ticket_file.read() == expected_bytes
+
 
     # # Этот тест работал до того, как мы в код добавили работу со сценариями, но сейчас этот тест не работает,
     # т.к. в on_even у нас используется контекст

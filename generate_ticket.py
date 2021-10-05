@@ -10,7 +10,7 @@ BLACK = (0, 0, 0, 255)
 NAME_OFFSET = (230, 165)
 EMAIL_OFFSET = (230, 200)
 AVATAR_SIZE = 100
-AVATAR_OFFSET = (100, 200)
+AVATAR_OFFSET = (80, 155)
 
 
 def generate_ticket(name, email):
@@ -22,10 +22,13 @@ def generate_ticket(name, email):
         draw.text(EMAIL_OFFSET, email, font=font, fill=BLACK)
 
         try:
-            response = requests.get(url=f'https://api.adorable.io/avatars/{AVATAR_SIZE}/{email}')
+            response = requests.get(url=f'https://bucket.roach.gg/avatars/default/44.png')
             # передаем на вход файловому дискриптору IO (на подобие работы с фалами .open/.write и т.д.) байты
             # (.content),чтобы потом работать с ним, как с обычным файлом. Позволяет записывать данные в память и не
-            # хранить их нигде.
+            # хранить их нигде. https://api.adorable.io/avatars/{AVATAR_SIZE}/{email}
+            # TODO Чтобы заработало нужно найти ресурс генерации аваторок по почте с сохранением картини в формате png,
+            #  jpeg и т.д. api.adorable.io больше не работает. Либо переписать код, чтобы генерация была через
+            #  какую-нибудь библиотеку
             avatar_file_like = BytesIO(response.content)
             avatar = Image.open(avatar_file_like)
 
