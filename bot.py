@@ -2,6 +2,8 @@
 
 import logging
 import random
+
+import requests
 import vk_api
 from pony.orm import db_session
 from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
@@ -122,7 +124,8 @@ class Bot:
         if state is not None:
             # После добавления user_states в бд нижняя строка изменилась.
             # text_to_send = self.continue_scenario(user_id=user_id, text=text)
-            text_to_send = self.continue_scenario(text, state)
+            # text_to_send = self.continue_scenario(text, state) убрали после доб. функ. отправки текста и изображения
+            self.continue_scenario(text, state, user_id)
         else:
             # search intent
             for intent in settings.INTENTS:
@@ -134,13 +137,29 @@ class Bot:
                     # если интент имеет не пустой ответ, значит надо его сообщить и больше ничего не делать,
                     # если нет, то запустить сценарий
                     if intent['answer']:
-                        text_to_send = intent['answer']
+                        # text_to_send = intent['answer'] убрали после добавления функций отправки текста и изображения
+                        self.send_text(intent['answer'], user_id)
                     else:
-                        text_to_send = self.start_scenario(user_id, intent['scenario'])
+                        # text_to_send = self.start_scenario(user_id, intent['scenario']) убрали после доб. функ.
+                        # отправки текста и изображения
+                        self.start_scenario(user_id, intent['scenario'], text)
                     break
             else:
-                text_to_send = settings.DEFAULT_ANSWER
+                # text_to_send = settings.DEFAULT_ANSWER убрали после добавления функций отправки текста и изображения
+                self.send_text(settings.DEFAULT_ANSWER, user_id)
 
+        # поскольку мы добавили отдельно две функции по отправке текста и изображения, то отправка текста перенеслась
+        # в фунцию отправки текста. И везде где ранее был прописан text_to_send нужно вызвать фунцию send_text
+        # self.api.messages.send(message=text_to_send,
+        #                        # выдергиваем из объекта только текст сообщения
+        #                        random_id=random.randint(0, 2 ** 20),
+        #                        # задержка для того, чтобы если одно и тоже сообщение будет отослано несколько
+        #                        # раз подряд, то пользователь увидит только одно сообщение
+        #                        peer_id=user_id)  # id позователя, чтобы ответ пришел именно ему
+
+    # поскольку до этого мы отправляли только текст, а сейчас нам нужно еще и билет отправить добавим две функции
+    # отдельно на отправку текста и отдельно на отправку билета (изображения)
+    def send_text(self, text_to_send, user_id):
         self.api.messages.send(message=text_to_send,
                                # выдергиваем из объекта только текст сообщения
                                random_id=random.randint(0, 2 ** 20),
@@ -148,24 +167,55 @@ class Bot:
                                # раз подряд, то пользователь увидит только одно сообщение
                                peer_id=user_id)  # id позователя, чтобы ответ пришел именно ему
 
+    def send_image(self, image, user_id):
+        # обращаемся к серверу вк и берем у него параметр upload_url, чтобы потом загрузить туда билет (картинку)
+        upload_url = self.api.photos.getMessagesUploadServer()['upload_url']
+        # в параметре files запроса post по документации вк название должно быть photo. Значение должно быть тьюплом
+        # с 2 или 3 значениями, первый, как по идеи должен называться файл, второй, само изображение, теретий,
+        # указывает каким именно типом является это изображение, в случае с png это image/png
+        # Все тут https://vk.com/dev/messages.send и тут https://vk.com/dev/upload_files
+        upload_data = requests.post(url=upload_url, files={'photo': ('image.png', image, 'image/png')}).json()
+        # затем нужно сохранить фото, распоковав upload_data и передав нужные параметры дальше
+        # print(upload_data)
+        image_data = self.api.photos.saveMessagesPhoto(**upload_data)
+
+        owner_id = image_data[0]['owner_id']
+        media_id = image_data[0]['id']
+        attachment = f'photo{owner_id}_{media_id}'
+
+        self.api.messages.send(message=attachment,
+                               random_id=random.randint(0, 2 ** 20),
+                               peer_id=user_id)
+
+    # фунция которая позволит отправлять изображение из любого шага
+    def send_step(self, step, user_id, text, context):
+        if 'text' in step:
+            self.send_text(step['text'].format(**context), user_id)
+        if 'image' in step:
+            handler = getattr(handlers, step['image'])
+            image = handler(text, context)
+            self.send_image(image, user_id)
+
     # метод который будет запускать сценарии
-    def start_scenario(self, user_id, scenario_name):
+    def start_scenario(self, user_id, scenario_name, text):
         scenario = settings.SCENARIOS[scenario_name]
         # первый шаг с которого нужно начать
         first_step = scenario['first_step']
         # запускаем этот первый шаг
         step = scenario['steps'][first_step]
         # выдаем текст этого шага и сохраняем state
-        text_to_send = step['text']
+        # text_to_send = step['text'] убрали после добавления функций отправки текста и изображения
+        self.send_step(step, user_id, text, context={})
+        # self.send_text(step['text'], user_id)
         # после переноса UserState в models нижняя строка изменилась
         # self.user_states[user_id] = UserState(scenario_name=scenario, step_name=first_step)
         UserState(user_id=str(user_id), scenario_name=str(scenario_name), step_name=first_step, context={})
 
-        return text_to_send
+        # return text_to_send  убрали после добавления функций отправки текста и изображения
 
     # метод который будет заниматься только продолжение сценария. После внесения user_states в бд удаляется
     # создание переменной state, мы ее будем получать на вход. Чтобы не было запроса в двух местах.
-    def continue_scenario(self, text, state):
+    def continue_scenario(self, text, state, user_id):
         # нужно понять на каком шаге он находится, прошел ли он этот шаг и либо оставить его на этом шаге
         # (если не закончил), либо пребросить на следующий.
         # state = self.user_states[user_id]
@@ -178,7 +228,10 @@ class Bot:
             # если True то следующий шаг
             next_step = steps[step['next_step']]
             # после переходна на новый шаг, нужно отправить сообщение из этого шага с контекстом (имя, почта и т.д.)
-            text_to_send = next_step['text'].format(**state.context)
+            # text_to_send = next_step['text'].format(**state.context) убр после доб функ отпр текста, изобр и шага
+            # self.send_text(text_to_send, user_id) убр после доб функ отпр текста, изобр и шага
+            self.send_step(next_step, user_id, text, state.context)
+
             if next_step['next_step']:
                 # если у следующего степа есть некс степ, то переходим в него
                 state.step_name = step['next_step']
@@ -193,8 +246,9 @@ class Bot:
         else:
             # если handler не совпал, то остается на текущем шаге и выдать failure_text
             text_to_send = step['failure_text'].format(**state.context)
+            self.send_text(text_to_send, user_id)
 
-        return text_to_send
+        # return text_to_send  убрали после добавления функций отправки текста и изображения
 
         #     # если событие типа "новое сообщение" то оно нас интересует
         #     log.debug('Отправляем сообщение назад')

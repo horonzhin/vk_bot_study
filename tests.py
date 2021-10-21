@@ -68,6 +68,7 @@ class Test1(TestCase):
                 # по скольку в методе run вызывается метод on_event мы его заменим на мок объект,
                 # т.к. в нем может быть куча зависемостей, вызовов и т.д.
                 bot.on_event = Mock()
+                bot.send_image = Mock()
                 # запускаем метод run у класса bot чтобы проверит, что он работает
                 bot.run()
 
@@ -128,6 +129,7 @@ class Test1(TestCase):
             bot = Bot('', '')
             # bot.api тоже будет моком
             bot.api = api_mock
+            bot.send_image = Mock()
             bot.run()
 
         # проверяем что функция send внутри функции on_event запускалась столько раз сколько у нас INPUTS

@@ -33,6 +33,7 @@ def generate_ticket(name, email):
             avatar = Image.open(avatar_file_like)
 
             base.paste(avatar, AVATAR_OFFSET)
+            # base.show()
 
         except Exception as exc:
             print(f'Сайт не отвечает: {exc}')
